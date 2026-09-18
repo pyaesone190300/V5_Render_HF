@@ -210,8 +210,6 @@ async def generate_voice(
         wav = await asyncio.to_thread(
             model.generate,
             text=text,
-            prompt_wav_path=str(reference_wav),
-            prompt_text=PROMPT_TEXT,
             reference_wav_path=str(reference_wav),
             inference_timesteps=10,
             cfg_value=2.0,
