@@ -490,7 +490,7 @@ async def generate_voice(text: str, reference_wav: Path, out: Path, voice_name: 
             inference_timesteps=10,
             cfg_value=2.0,
             retry_badcase=False,
-            max_len=1000,
+            max_len=5000,
         )
         sf.write(str(out), wav, get_sample_rate())
         print(f"✅ Generated sample_rate={get_sample_rate()}")
