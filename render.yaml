@@ -1,0 +1,12 @@
+services:
+  - type: worker
+    name: v5-myanmar-voice-bot
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    envVars:
+      - key: BOT_TOKEN
+        sync: false
+      - key: HF_REPO_ID
+        value: pyaesone190300/VoxCPM2
+      - key: HF_TOKEN
+        sync: false

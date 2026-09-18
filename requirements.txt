@@ -1,0 +1,8 @@
+aiogram==3.31.0
+aiofiles==22.1.0
+huggingface_hub>=0.30.0
+voxcpm
+soundfile
+librosa
+numpy
+torch
