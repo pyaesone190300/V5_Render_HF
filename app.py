@@ -509,8 +509,8 @@ async def text_handler(message: Message):
     text = message.text.strip()
     if not text:
         return
-    if len(text) > 1000:
-        await message.answer("❌ စာသားက 1000 characters ထက်မကျော်ရပါ။")
+    if len(text) > 5000:
+        await message.answer("❌ စာသားက 5000 characters ထက်မကျော်ရပါ။")
         return
 
     ref, voice_name = get_user_voice(uid)
