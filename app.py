@@ -1,568 +1,1355 @@
-import asyncio
-import json
 import os
-import shutil
-import tempfile
+import json
+import asyncio
+import subprocess
 from pathlib import Path
 
 import soundfile as sf
+import torch
+
 from aiogram import Bot, Dispatcher, F
-from aiogram.filters import Command, CommandStart
-from aiogram.types import Message, CallbackQuery, FSInputFile, InlineKeyboardMarkup, InlineKeyboardButton
+from aiogram.enums import ParseMode
+from aiogram.filters import CommandStart
+from aiogram.types import (
+    Message,
+    CallbackQuery,
+    InlineKeyboardMarkup,
+    InlineKeyboardButton,
+)
+from aiogram.client.default import DefaultBotProperties
+
 from huggingface_hub import snapshot_download
 from voxcpm import VoxCPM
 
+
+# ============================================================
+# CONFIG
+# ============================================================
+
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 OWNER_ID = int(os.getenv("OWNER_ID", "0"))
-HF_REPO_ID = os.getenv("HF_REPO_ID", "pyaesone190300/VoxCPM2")
-HF_TOKEN = os.getenv("HF_TOKEN") or None
+
+MODEL_REPO = "pyaesone190300/VoxCPM2"
 
 BASE_DIR = Path("/app")
+
 MODEL_DIR = BASE_DIR / "model"
+
+# ------------------------------------------------------------
+# Anna
+# ------------------------------------------------------------
+
 ANNA_VOICE = BASE_DIR / "vvipvoice_v5_ref.wav"
 ANNA_NAME = "Anna"
-CUSTOM_VOICE_DIR = BASE_DIR / "custom_voices"
-ACCESS_FILE = BASE_DIR / "access.json"
 
+# ------------------------------------------------------------
+# Fangyung
+# ------------------------------------------------------------
+
+FANGYUNG_VOICE = BASE_DIR / "Fangyung_natural.wav"
+FANGYUNG_NAME = "Fangyung"
+
+# ------------------------------------------------------------
+# Custom Voice
+# ------------------------------------------------------------
+
+CUSTOM_VOICE_DIR = BASE_DIR / "custom_voices"
 CUSTOM_VOICE_DIR.mkdir(parents=True, exist_ok=True)
 
-# Kept for Anna's original reference setup/documentation.
-PROMPT_TEXT = """ဒေါ်ခင်ခင်ညိုက နူးငယ်ရဲ့ အဒေါ်ပါ။လူကတော့ နည်းနည်းလေး sexyကျတယ်။ နူးငယ်ရဲ့ အဒေါ်ဆိုပေမယ့် အမေ့ညီမ အငယ်ဆုံးဆိုတော့ နူးငယ်နဲ့ကတော့ အသက်သိပ်မကွာပါဘူး။ နူးငယ်အတွက်က အဒေါ်ဆိုလည်းဟုတ်၊ သူငယ်ချင်းဆိုလည်းဟုတ်ဆိုတော့ တူမနှစ်ယောက်က ပြောမနာဆိုမနာပါ။"""
+ACCESS_FILE = BASE_DIR / "access.json"
+
+
+# ============================================================
+# GLOBALS
+# ============================================================
 
 if not BOT_TOKEN:
-    raise RuntimeError("BOT_TOKEN environment variable မတွေ့ပါ။")
+    raise RuntimeError("BOT_TOKEN မရှိပါ")
 
-bot = Bot(token=BOT_TOKEN)
+if not OWNER_ID:
+    raise RuntimeError("OWNER_ID မရှိပါ")
+
+
+bot = Bot(
+    token=BOT_TOKEN,
+    default=DefaultBotProperties(
+        parse_mode=ParseMode.HTML
+    )
+)
+
 dp = Dispatcher()
+
 model = None
-tts_lock = asyncio.Lock()
-access_lock = asyncio.Lock()
+
+# User selected voice
+# anna / fangyung / custom
 user_voice = {}
 
-def default_access():
-    return {"approved": [], "pending": [], "rejected": []}
+# TTS lock
+tts_lock = asyncio.Lock()
+
+
+# ============================================================
+# ACCESS SYSTEM
+# ============================================================
 
 def load_access():
     if not ACCESS_FILE.exists():
-        return default_access()
-    try:
-        with open(ACCESS_FILE, "r", encoding="utf-8") as f:
-            data = json.load(f)
-        data.setdefault("approved", [])
-        data.setdefault("pending", [])
-        data.setdefault("rejected", [])
+        data = {
+            "approved": [],
+            "pending": []
+        }
+
+        ACCESS_FILE.write_text(
+            json.dumps(data, indent=2),
+            encoding="utf-8"
+        )
+
         return data
-    except Exception as e:
-        print(f"⚠️ access.json load error: {e}")
-        return default_access()
+
+    try:
+        data = json.loads(
+            ACCESS_FILE.read_text(
+                encoding="utf-8"
+            )
+        )
+
+        if "approved" not in data:
+            data["approved"] = []
+
+        if "pending" not in data:
+            data["pending"] = []
+
+        return data
+
+    except Exception:
+        return {
+            "approved": [],
+            "pending": []
+        }
+
 
 def save_access(data):
-    tmp = ACCESS_FILE.with_suffix(".tmp")
-    with open(tmp, "w", encoding="utf-8") as f:
-        json.dump(data, f, ensure_ascii=False, indent=2)
-    tmp.replace(ACCESS_FILE)
+    ACCESS_FILE.write_text(
+        json.dumps(
+            data,
+            indent=2,
+            ensure_ascii=False
+        ),
+        encoding="utf-8"
+    )
+
 
 def is_owner(user_id: int):
-    return OWNER_ID != 0 and user_id == OWNER_ID
+    return user_id == OWNER_ID
+
 
 def is_approved(user_id: int):
-    return is_owner(user_id) or str(user_id) in load_access()["approved"]
+    if is_owner(user_id):
+        return True
+
+    data = load_access()
+
+    return user_id in data.get("approved", [])
+
 
 def is_pending(user_id: int):
-    return str(user_id) in load_access()["pending"]
+    data = load_access()
+
+    return user_id in data.get("pending", [])
+
+
+# ============================================================
+# CUSTOM VOICE
+# ============================================================
 
 def get_custom_voice_path(user_id: int):
     return CUSTOM_VOICE_DIR / f"{user_id}.wav"
 
-def has_custom_voice(user_id: int):
-    return get_custom_voice_path(user_id).exists()
 
-# FIX: this function must exist before main() calls it.
-def download_model():
-    MODEL_DIR.mkdir(parents=True, exist_ok=True)
-    if (MODEL_DIR / "model.safetensors").exists():
-        print("✅ Hugging Face model already exists")
-        return
-    print(f"⬇️ Downloading {HF_REPO_ID} ...")
-    snapshot_download(
-        repo_id=HF_REPO_ID,
-        local_dir=str(MODEL_DIR),
-        token=HF_TOKEN,
+# ============================================================
+# VOICE MENU
+# ============================================================
+
+def main_menu(current="Anna"):
+
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text=f"👩 Anna{'  ✓' if current == 'Anna' else ''}",
+                    callback_data="voice:anna",
+                ),
+                InlineKeyboardButton(
+                    text=f"🎙️ Fangyung{'  ✓' if current == 'Fangyung' else ''}",
+                    callback_data="voice:fangyung",
+                ),
+            ],
+            [
+                InlineKeyboardButton(
+                    text=f"🎤 Custom Voice{'  ✓' if current == 'Custom Voice' else ''}",
+                    callback_data="voice:custom",
+                ),
+            ],
+            [
+                InlineKeyboardButton(
+                    text="ℹ️ How to Use",
+                    callback_data="menu:help",
+                )
+            ],
+        ]
     )
-    print("✅ Hugging Face model ready")
 
-def load_model():
+
+# ============================================================
+# START
+# ============================================================
+
+@dp.message(CommandStart())
+async def start_handler(message: Message):
+
+    uid = message.from_user.id
+
+    # Default voice = Anna
+    user_voice[uid] = "anna"
+
+    if not is_approved(uid) and not is_owner(uid):
+
+        if is_pending(uid):
+
+            await message.answer(
+                "⏳ <b>Access Request Pending</b>\n\n"
+                "Owner က approve လုပ်ပေးဖို့ စောင့်ပေးပါ။"
+            )
+
+            return
+
+        data = load_access()
+
+        if uid not in data["pending"]:
+            data["pending"].append(uid)
+            save_access(data)
+
+        await message.answer(
+            "🔐 <b>Access Required</b>\n\n"
+            "ဒီ Bot ကို အသုံးပြုဖို့ Owner Approval လိုအပ်ပါတယ်။\n\n"
+            "⏳ Access request ပို့ပြီးပါပြီ။"
+        )
+
+        try:
+
+            await bot.send_message(
+                OWNER_ID,
+                "🔔 <b>New Access Request</b>\n\n"
+                f"👤 Name: {message.from_user.full_name}\n"
+                f"🆔 ID: <code>{uid}</code>\n\n"
+                "Approve / Reject လုပ်နိုင်ပါတယ်။",
+                reply_markup=InlineKeyboardMarkup(
+                    inline_keyboard=[
+                        [
+                            InlineKeyboardButton(
+                                text="✅ Approve",
+                                callback_data=f"access:approve:{uid}"
+                            ),
+                            InlineKeyboardButton(
+                                text="❌ Reject",
+                                callback_data=f"access:reject:{uid}"
+                            ),
+                        ]
+                    ]
+                )
+            )
+
+        except Exception as e:
+            print("Owner notification error:", e)
+
+        return
+
+    await message.answer(
+        "🎙️ <b>VoxCPM2 Voice Bot</b>\n\n"
+        "အသံရွေးချယ်ပြီး မြန်မာစာပို့ပါ။\n\n"
+        "👩 Anna — Original Voice\n"
+        "🎙️ Fangyung — Natural Boy Voice\n"
+        "🎤 Custom Voice — ကိုယ်ပိုင် Voice",
+        reply_markup=main_menu("Anna")
+    )
+
+
+# ============================================================
+# OWNER APPROVE
+# ============================================================
+
+@dp.callback_query(F.data.startswith("access:approve:"))
+async def approve_user(callback: CallbackQuery):
+
+    if not is_owner(callback.from_user.id):
+        await callback.answer(
+            "❌ Owner Only",
+            show_alert=True
+        )
+        return
+
+    try:
+        uid = int(
+            callback.data.split(":")[-1]
+        )
+
+    except Exception:
+        await callback.answer(
+            "❌ Invalid User ID",
+            show_alert=True
+        )
+        return
+
+    data = load_access()
+
+    if uid not in data["approved"]:
+        data["approved"].append(uid)
+
+    if uid in data["pending"]:
+        data["pending"].remove(uid)
+
+    save_access(data)
+
+    await callback.answer(
+        "✅ Approved"
+    )
+
+    try:
+
+        await bot.send_message(
+            uid,
+            "✅ <b>Access Approved!</b>\n\n"
+            "VoxCPM2 Voice Bot ကို အသုံးပြုနိုင်ပါပြီ။\n\n"
+            "အသံရွေးပြီး မြန်မာစာပို့ပါ။",
+            reply_markup=main_menu("Anna")
+        )
+
+    except Exception as e:
+        print("Approved user notification error:", e)
+
+    try:
+
+        await callback.message.edit_text(
+            "✅ <b>User Approved</b>\n\n"
+            f"User ID: <code>{uid}</code>"
+        )
+
+    except Exception:
+        pass
+
+
+# ============================================================
+# OWNER REJECT
+# ============================================================
+
+@dp.callback_query(F.data.startswith("access:reject:"))
+async def reject_user(callback: CallbackQuery):
+
+    if not is_owner(callback.from_user.id):
+        await callback.answer(
+            "❌ Owner Only",
+            show_alert=True
+        )
+        return
+
+    try:
+        uid = int(
+            callback.data.split(":")[-1]
+        )
+
+    except Exception:
+        await callback.answer(
+            "❌ Invalid User ID",
+            show_alert=True
+        )
+        return
+
+    data = load_access()
+
+    if uid in data["pending"]:
+        data["pending"].remove(uid)
+
+    if uid in data["approved"]:
+        data["approved"].remove(uid)
+
+    save_access(data)
+
+    await callback.answer(
+        "❌ Rejected"
+    )
+
+    try:
+
+        await bot.send_message(
+            uid,
+            "❌ <b>Access Rejected</b>\n\n"
+            "Owner မှ Access မပေးသေးပါ။"
+        )
+
+    except Exception as e:
+        print("Reject notification error:", e)
+
+    try:
+
+        await callback.message.edit_text(
+            "❌ <b>User Rejected</b>\n\n"
+            f"User ID: <code>{uid}</code>"
+        )
+
+    except Exception:
+        pass
+
+
+# ============================================================
+# ANNA SELECT
+# ============================================================
+
+@dp.callback_query(F.data == "voice:anna")
+async def select_anna(callback: CallbackQuery):
+
+    uid = callback.from_user.id
+
+    if not is_approved(uid):
+
+        await callback.answer(
+            "🔐 Access မရသေးပါ",
+            show_alert=True
+        )
+
+        return
+
+    if not ANNA_VOICE.exists():
+
+        await callback.answer(
+            "❌ Anna voice file မတွေ့ပါ",
+            show_alert=True
+        )
+
+        return
+
+    user_voice[uid] = "anna"
+
+    await callback.answer(
+        "👩 Anna ကို ရွေးပြီးပါပြီ"
+    )
+
+    try:
+
+        await callback.message.edit_text(
+            "👩 <b>Anna</b>\n\n"
+            "Original Anna Voice ကို အသုံးပြုနေပါတယ်။\n\n"
+            "အခု မြန်မာစာပို့လိုက်ပါ။",
+            reply_markup=main_menu("Anna")
+        )
+
+    except Exception:
+        pass
+
+
+# ============================================================
+# FANGYUNG SELECT
+# ============================================================
+
+@dp.callback_query(F.data == "voice:fangyung")
+async def select_fangyung(callback: CallbackQuery):
+
+    uid = callback.from_user.id
+
+    if not is_approved(uid):
+
+        await callback.answer(
+            "🔐 Access မရသေးပါ",
+            show_alert=True
+        )
+
+        return
+
+    if not FANGYUNG_VOICE.exists():
+
+        await callback.answer(
+            "❌ Fangyung voice file မတွေ့ပါ",
+            show_alert=True
+        )
+
+        return
+
+    user_voice[uid] = "fangyung"
+
+    await callback.answer(
+        "🎙️ Fangyung ကို ရွေးပြီးပါပြီ"
+    )
+
+    try:
+
+        await callback.message.edit_text(
+            "🎙️ <b>Fangyung</b>\n\n"
+            "Fangyung Natural Boy Voice ကို "
+            "အသုံးပြုနေပါတယ်။\n\n"
+            "အခု မြန်မာစာပို့လိုက်ပါ။",
+            reply_markup=main_menu("Fangyung")
+        )
+
+    except Exception:
+        pass
+
+
+# ============================================================
+# CUSTOM SELECT
+# ============================================================
+
+@dp.callback_query(F.data == "voice:custom")
+async def select_custom(callback: CallbackQuery):
+
+    uid = callback.from_user.id
+
+    if not is_approved(uid):
+
+        await callback.answer(
+            "🔐 Access မရသေးပါ",
+            show_alert=True
+        )
+
+        return
+
+    custom_path = get_custom_voice_path(uid)
+
+    if not custom_path.exists():
+
+        user_voice[uid] = "custom"
+
+        await callback.answer(
+            "🎤 Custom Voice upload လုပ်ပါ",
+            show_alert=True
+        )
+
+        try:
+
+            await callback.message.edit_text(
+                "🎤 <b>Custom Voice</b>\n\n"
+                "ကိုယ်ပိုင် Voice file တစ်ခုကို ပို့ပါ။\n\n"
+                "အသုံးပြုနိုင်သော format:\n"
+                "• Voice\n"
+                "• Audio\n"
+                "• WAV / MP3 / M4A\n\n"
+                "Voice file ပို့ပြီးရင် "
+                "Custom Voice အဖြစ် အသုံးပြုနိုင်ပါပြီ။",
+                reply_markup=main_menu("Custom Voice")
+            )
+
+        except Exception:
+            pass
+
+        return
+
+    user_voice[uid] = "custom"
+
+    await callback.answer(
+        "🎤 Custom Voice ကို ရွေးပြီးပါပြီ"
+    )
+
+    try:
+
+        await callback.message.edit_text(
+            "🎤 <b>Custom Voice</b>\n\n"
+            "သင့် Custom Voice ကို အသုံးပြုနေပါတယ်။\n\n"
+            "အခု မြန်မာစာပို့လိုက်ပါ။",
+            reply_markup=main_menu("Custom Voice")
+        )
+
+    except Exception:
+        pass
+
+
+# ============================================================
+# HELP
+# ============================================================
+
+@dp.callback_query(F.data == "menu:help")
+async def help_menu(callback: CallbackQuery):
+
+    uid = callback.from_user.id
+
+    if not is_approved(uid):
+
+        await callback.answer(
+            "🔐 Access မရသေးပါ",
+            show_alert=True
+        )
+
+        return
+
+    await callback.answer()
+
+    try:
+
+        await callback.message.edit_text(
+            "ℹ️ <b>How to Use</b>\n\n"
+            "👩 <b>Anna</b>\n"
+            "Original Anna Voice\n\n"
+            "🎙️ <b>Fangyung</b>\n"
+            "Natural Boy Voice\n\n"
+            "🎤 <b>Custom Voice</b>\n"
+            "ကိုယ်ပိုင် Voice file upload လုပ်ပြီး "
+            "အသုံးပြုနိုင်ပါတယ်။\n\n"
+            "📝 Voice ရွေးပြီးနောက် မြန်မာစာပို့ပါ။",
+            reply_markup=main_menu(
+                "Anna"
+                if user_voice.get(uid, "anna") == "anna"
+                else (
+                    "Fangyung"
+                    if user_voice.get(uid) == "fangyung"
+                    else "Custom Voice"
+                )
+            )
+        )
+
+    except Exception:
+        pass
+
+
+# ============================================================
+# VOICE UPLOAD
+# ============================================================
+
+async def download_telegram_file(
+    message: Message,
+    file_id: str,
+    output_path: Path
+):
+
+    tg_file = await bot.get_file(file_id)
+
+    await bot.download_file(
+        tg_file.file_path,
+        destination=output_path
+    )
+
+
+async def convert_to_wav(
+    input_path: Path,
+    output_path: Path
+):
+
+    command = [
+        "ffmpeg",
+        "-y",
+        "-i",
+        str(input_path),
+        "-ac",
+        "1",
+        "-ar",
+        "24000",
+        "-sample_fmt",
+        "s16",
+        str(output_path),
+    ]
+
+    process = await asyncio.create_subprocess_exec(
+        *command,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE
+    )
+
+    stdout, stderr = await process.communicate()
+
+    if process.returncode != 0:
+
+        print(
+            stderr.decode(
+                errors="ignore"
+            )
+        )
+
+        raise RuntimeError(
+            "FFmpeg conversion failed"
+        )
+
+
+# ============================================================
+# TELEGRAM VOICE
+# ============================================================
+
+@dp.message(F.voice)
+async def receive_voice(message: Message):
+
+    uid = message.from_user.id
+
+    if not is_approved(uid):
+
+        await message.answer(
+            "🔐 Access မရသေးပါ။"
+        )
+
+        return
+
+    user_voice[uid] = "custom"
+
+    raw_path = (
+        BASE_DIR
+        / f"temp_{uid}_voice.ogg"
+    )
+
+    output_path = get_custom_voice_path(uid)
+
+    try:
+
+        await message.answer(
+            "⏳ <b>Custom Voice သိမ်းနေပါတယ်...</b>"
+        )
+
+        await download_telegram_file(
+            message,
+            message.voice.file_id,
+            raw_path
+        )
+
+        await convert_to_wav(
+            raw_path,
+            output_path
+        )
+
+        await message.answer(
+            "✅ <b>Custom Voice သိမ်းပြီးပါပြီ</b>\n\n"
+            "🎤 Custom Voice ကို အသုံးပြုနေပါတယ်။\n\n"
+            "အခု မြန်မာစာပို့ပါ။",
+            reply_markup=main_menu("Custom Voice")
+        )
+
+    except Exception as e:
+
+        print("Voice upload error:", e)
+
+        await message.answer(
+            "❌ Voice file ပြောင်းလဲရာမှာ Error ဖြစ်ပါတယ်။"
+        )
+
+    finally:
+
+        if raw_path.exists():
+            raw_path.unlink()
+
+
+# ============================================================
+# TELEGRAM AUDIO
+# ============================================================
+
+@dp.message(F.audio)
+async def receive_audio(message: Message):
+
+    uid = message.from_user.id
+
+    if not is_approved(uid):
+
+        await message.answer(
+            "🔐 Access မရသေးပါ။"
+        )
+
+        return
+
+    user_voice[uid] = "custom"
+
+    extension = ".audio"
+
+    if message.audio.file_name:
+        extension = (
+            Path(
+                message.audio.file_name
+            ).suffix
+            or ".audio"
+        )
+
+    raw_path = (
+        BASE_DIR
+        / f"temp_{uid}_audio{extension}"
+    )
+
+    output_path = get_custom_voice_path(uid)
+
+    try:
+
+        await message.answer(
+            "⏳ <b>Custom Voice သိမ်းနေပါတယ်...</b>"
+        )
+
+        await download_telegram_file(
+            message,
+            message.audio.file_id,
+            raw_path
+        )
+
+        await convert_to_wav(
+            raw_path,
+            output_path
+        )
+
+        await message.answer(
+            "✅ <b>Custom Voice သိမ်းပြီးပါပြီ</b>\n\n"
+            "🎤 Custom Voice ကို အသုံးပြုနေပါတယ်။\n\n"
+            "အခု မြန်မာစာပို့ပါ။",
+            reply_markup=main_menu("Custom Voice")
+        )
+
+    except Exception as e:
+
+        print("Audio upload error:", e)
+
+        await message.answer(
+            "❌ Audio file ပြောင်းလဲရာမှာ Error ဖြစ်ပါတယ်။"
+        )
+
+    finally:
+
+        if raw_path.exists():
+            raw_path.unlink()
+
+
+# ============================================================
+# TELEGRAM DOCUMENT
+# ============================================================
+
+@dp.message(F.document)
+async def receive_document(message: Message):
+
+    uid = message.from_user.id
+
+    if not is_approved(uid):
+
+        await message.answer(
+            "🔐 Access မရသေးပါ။"
+        )
+
+        return
+
+    user_voice[uid] = "custom"
+
+    filename = (
+        message.document.file_name
+        or "voice"
+    )
+
+    extension = (
+        Path(filename).suffix
+        or ".audio"
+    )
+
+    raw_path = (
+        BASE_DIR
+        / f"temp_{uid}_document{extension}"
+    )
+
+    output_path = get_custom_voice_path(uid)
+
+    try:
+
+        await message.answer(
+            "⏳ <b>Custom Voice သိမ်းနေပါတယ်...</b>"
+        )
+
+        await download_telegram_file(
+            message,
+            message.document.file_id,
+            raw_path
+        )
+
+        await convert_to_wav(
+            raw_path,
+            output_path
+        )
+
+        await message.answer(
+            "✅ <b>Custom Voice သိမ်းပြီးပါပြီ</b>\n\n"
+            "🎤 Custom Voice ကို အသုံးပြုနေပါတယ်။\n\n"
+            "အခု မြန်မာစာပို့ပါ။",
+            reply_markup=main_menu("Custom Voice")
+        )
+
+    except Exception as e:
+
+        print("Document upload error:", e)
+
+        await message.answer(
+            "❌ Voice file ပြောင်းလဲရာမှာ Error ဖြစ်ပါတယ်။"
+        )
+
+    finally:
+
+        if raw_path.exists():
+            raw_path.unlink()
+
+
+# ============================================================
+# GET USER VOICE
+# ============================================================
+
+def get_user_voice(user_id: int):
+
+    selected = user_voice.get(
+        user_id,
+        "anna"
+    )
+
+    # --------------------------------------------------------
+    # Anna
+    # --------------------------------------------------------
+
+    if selected == "anna":
+
+        return (
+            ANNA_VOICE,
+            ANNA_NAME
+        )
+
+    # --------------------------------------------------------
+    # Fangyung
+    # --------------------------------------------------------
+
+    if selected == "fangyung":
+
+        if FANGYUNG_VOICE.exists():
+
+            return (
+                FANGYUNG_VOICE,
+                FANGYUNG_NAME
+            )
+
+        # Fallback to Anna
+        user_voice[user_id] = "anna"
+
+        return (
+            ANNA_VOICE,
+            ANNA_NAME
+        )
+
+    # --------------------------------------------------------
+    # Custom
+    # --------------------------------------------------------
+
+    if selected == "custom":
+
+        custom_path = get_custom_voice_path(
+            user_id
+        )
+
+        if custom_path.exists():
+
+            return (
+                custom_path,
+                "Custom Voice"
+            )
+
+        # Fallback to Anna
+        user_voice[user_id] = "anna"
+
+        return (
+            ANNA_VOICE,
+            ANNA_NAME
+        )
+
+    # --------------------------------------------------------
+    # Unknown selection
+    # --------------------------------------------------------
+
+    user_voice[user_id] = "anna"
+
+    return (
+        ANNA_VOICE,
+        ANNA_NAME
+    )
+
+
+# ============================================================
+# SAMPLE RATE
+# ============================================================
+
+def get_sample_rate():
+
+    if hasattr(model, "tts_model"):
+
+        if hasattr(
+            model.tts_model,
+            "sample_rate"
+        ):
+
+            return model.tts_model.sample_rate
+
+    return 24000
+
+
+# ============================================================
+# GENERATE VOICE
+# ============================================================
+
+async def generate_voice(
+    text,
+    reference_wav,
+    output_path,
+    voice_name
+):
+
+    async with tts_lock:
+
+        print()
+        print("=" * 60)
+        print("🎙️ Generating Voice")
+        print("Voice:", voice_name)
+        print("Reference:", reference_wav)
+        print("Text Length:", len(text))
+        print("=" * 60)
+
+        # ----------------------------------------------------
+        # Anna = ORIGINAL SETTING
+        # Fangyung = NATURAL SETTING
+        # Custom = NATURAL SETTING
+        # ----------------------------------------------------
+
+        if voice_name == "Anna":
+
+            inference_timesteps = 10
+
+        else:
+
+            inference_timesteps = 30
+
+        print(
+            "Inference Timesteps:",
+            inference_timesteps
+        )
+
+        with torch.inference_mode():
+
+            wav = await asyncio.to_thread(
+                model.generate,
+                text=text,
+                reference_wav_path=str(
+                    reference_wav
+                ),
+                cfg_value=2.0,
+                inference_timesteps=inference_timesteps,
+                retry_badcase=False,
+                max_len=2000,
+            )
+
+        sf.write(
+            str(output_path),
+            wav,
+            get_sample_rate()
+        )
+
+        print(
+            "✅ Generated:",
+            output_path
+        )
+
+
+# ============================================================
+# TEXT TO SPEECH
+# ============================================================
+
+@dp.message(F.text)
+async def text_to_speech(message: Message):
+
+    uid = message.from_user.id
+
+    if not is_approved(uid):
+
+        await message.answer(
+            "🔐 Access မရသေးပါ။\n\n"
+            "/start ကိုနှိပ်ပြီး Access Request ပို့ပါ။"
+        )
+
+        return
+
+    text = message.text.strip()
+
+    if not text:
+
+        return
+
+    # --------------------------------------------------------
+    # MAX TEXT
+    # --------------------------------------------------------
+
+    if len(text) > 5000:
+
+        await message.answer(
+            "❌ စာသားအရှည်ဆုံး 2000 characters အထိသာ "
+            "အသုံးပြုနိုင်ပါတယ်။"
+        )
+
+        return
+
+    # --------------------------------------------------------
+    # Get selected voice
+    # --------------------------------------------------------
+
+    reference_wav, voice_name = get_user_voice(
+        uid
+    )
+
+    # --------------------------------------------------------
+    # Reference check
+    # --------------------------------------------------------
+
+    if not reference_wav.exists():
+
+        await message.answer(
+            f"❌ <b>{voice_name}</b> reference voice "
+            "file မတွေ့ပါ။"
+        )
+
+        return
+
+    # --------------------------------------------------------
+    # Status
+    # --------------------------------------------------------
+
+    status = await message.answer(
+        f"🎙️ <b>{voice_name}</b>\n\n"
+        "⏳ အသံထုတ်နေပါတယ်..."
+    )
+
+    output_path = (
+        BASE_DIR
+        / f"tts_{uid}.wav"
+    )
+
+    try:
+
+        await generate_voice(
+            text=text,
+            reference_wav=reference_wav,
+            output_path=output_path,
+            voice_name=voice_name
+        )
+
+        # ----------------------------------------------------
+        # Delete processing message
+        # ----------------------------------------------------
+
+        try:
+            await status.delete()
+        except Exception:
+            pass
+
+        # ----------------------------------------------------
+        # Send voice
+        # ----------------------------------------------------
+
+        with open(
+            output_path,
+            "rb"
+        ) as audio_file:
+
+            await message.answer_voice(
+                audio=audio_file,
+                caption=(
+                    f"🎙️ <b>{voice_name}</b>"
+                ),
+                reply_markup=main_menu(
+                    voice_name
+                )
+            )
+
+    except Exception as e:
+
+        print()
+        print("❌ TTS ERROR")
+        print(e)
+
+        try:
+
+            await status.edit_text(
+                "❌ <b>Voice generation failed</b>\n\n"
+                f"<code>{str(e)[:1000]}</code>"
+            )
+
+        except Exception:
+            await message.answer(
+                "❌ Voice generation failed."
+            )
+
+    finally:
+
+        if output_path.exists():
+
+            try:
+                output_path.unlink()
+            except Exception:
+                pass
+
+
+# ============================================================
+# MODEL DOWNLOAD
+# ============================================================
+
+async def download_model():
+
+    MODEL_DIR.mkdir(
+        parents=True,
+        exist_ok=True
+    )
+
+    # --------------------------------------------------------
+    # Check whether model already exists
+    # --------------------------------------------------------
+
+    existing_files = list(
+        MODEL_DIR.rglob("*")
+    )
+
+    if existing_files:
+
+        print(
+            "✅ VoxCPM2 model already exists."
+        )
+
+        return
+
+    print()
+    print("=" * 60)
+    print("📥 Downloading VoxCPM2 Model")
+    print("=" * 60)
+
+    await asyncio.to_thread(
+        snapshot_download,
+        repo_id=MODEL_REPO,
+        local_dir=str(MODEL_DIR),
+        local_dir_use_symlinks=False,
+    )
+
+    print(
+        "✅ Model download complete."
+    )
+
+
+# ============================================================
+# LOAD MODEL
+# ============================================================
+
+async def load_model():
+
     global model
-    print("🧠 Loading VoxCPM2...")
-    model = VoxCPM.from_pretrained(
+
+    print()
+    print("=" * 60)
+    print("🧠 Loading VoxCPM2")
+    print("=" * 60)
+
+    model = await asyncio.to_thread(
+        VoxCPM.from_pretrained,
         str(MODEL_DIR),
         load_denoiser=False,
         local_files_only=True,
         optimize=False,
         device="cpu",
     )
-    print("Loaded VoxCPM2Model")
-    print("✅ VoxCPM2 loaded")
-    try:
-        print(f"Device: {next(model.parameters()).device}")
-    except (StopIteration, AttributeError):
-        print("Device: cpu")
-    try:
-        print(f"Sample rate: {model.tts_model.sample_rate}")
-    except AttributeError:
-        print("⚠️ Sample rate fallback: 16000")
 
-def get_sample_rate():
-    try:
-        return model.tts_model.sample_rate
-    except AttributeError:
-        pass
-    try:
-        return model.sample_rate
-    except AttributeError:
-        pass
-    return 16000
+    print()
+    print("✅ VoxCPM2 Loaded Successfully")
+    print("=" * 60)
 
-def main_menu(current="Anna"):
-    return InlineKeyboardMarkup(inline_keyboard=[
-        [
-            InlineKeyboardButton(
-                text=f"👩 Anna{'  ✓' if current == 'Anna' else ''}",
-                callback_data="voice:anna",
-            ),
-            InlineKeyboardButton(
-                text=f"🎤 Custom Voice{'  ✓' if current == 'Custom Voice' else ''}",
-                callback_data="voice:custom",
-            ),
-        ],
-        [
-            InlineKeyboardButton(
-                text="ℹ️ How to Use",
-                callback_data="menu:help",
-            )
-        ],
-    ])
 
-def back_menu():
-    return InlineKeyboardMarkup(inline_keyboard=[[
-        InlineKeyboardButton(text="⬅️ Back", callback_data="menu:main")
-    ]])
-
-async def request_access(message: Message):
-    user = message.from_user
-    uid = str(user.id)
-    if is_owner(user.id) or is_approved(user.id):
-        return True
-
-    async with access_lock:
-        data = load_access()
-        if uid not in data["pending"]:
-            data["pending"].append(uid)
-        if uid in data["rejected"]:
-            data["rejected"].remove(uid)
-        save_access(data)
-
-    username = f"@{user.username}" if user.username else "No username"
-    name = user.first_name or "Unknown"
-    kb = InlineKeyboardMarkup(inline_keyboard=[[
-        InlineKeyboardButton(text="✅ Approve", callback_data=f"access:approve:{user.id}"),
-        InlineKeyboardButton(text="❌ Reject", callback_data=f"access:reject:{user.id}"),
-    ]])
-    try:
-        await bot.send_message(
-            OWNER_ID,
-            "🔐 <b>New Access Request</b>\n\n"
-            f"👤 Name: <b>{name}</b>\n"
-            f"🔹 Username: {username}\n"
-            f"🆔 User ID: <code>{user.id}</code>\n\n"
-            "ဒီ User ကို Bot အသုံးပြုခွင့်ပေးမလား?",
-            parse_mode="HTML",
-            reply_markup=kb,
-        )
-    except Exception as e:
-        print(f"❌ Cannot contact owner: {e}")
-    return False
-
-@dp.message(CommandStart())
-async def start_handler(message: Message):
-    uid = message.from_user.id
-    if not is_approved(uid):
-        if not await request_access(message):
-            await message.answer(
-                "🔐 <b>Access Pending</b>\n\n"
-                "ဒီ Bot ကို အသုံးပြုရန် Owner ရဲ့ ခွင့်ပြုချက်လိုအပ်ပါတယ်။\n\n"
-                "⏳ Owner ဆီကို Access Request ပို့ပြီးပါပြီ။",
-                parse_mode="HTML",
-            )
-        return
-
-    user_voice[uid] = "anna"
-    await message.answer(
-        "🎙️ <b>VoxCPM2 Myanmar Voice Bot</b>\n\n"
-        "👋 မင်္ဂလာပါ။\n\n"
-        "ဒီ Bot မှာ မြန်မာစာကို Voice အဖြစ် ပြောင်းနိုင်ပါတယ်။\n\n"
-        "🎙️ <b>Current Voice: Anna</b>\n\n"
-        "အသုံးပြုလိုတဲ့ Voice ကို အောက်က Menu ကနေ ရွေးပါ။",
-        parse_mode="HTML",
-        reply_markup=main_menu("Anna"),
-    )
-
-@dp.message(Command("pending"))
-async def pending_handler(message: Message):
-    if not is_owner(message.from_user.id):
-        return
-    pending = load_access()["pending"]
-    if not pending:
-        await message.answer("📭 <b>Pending Request မရှိပါ။</b>", parse_mode="HTML")
-        return
-    await message.answer(
-        "🔐 <b>Pending Access Requests</b>\n\n" +
-        "".join(f"🆔 <code>{x}</code>\n" for x in pending),
-        parse_mode="HTML",
-    )
-
-@dp.callback_query(F.data.startswith("access:"))
-async def access_callback(callback: CallbackQuery):
-    if not is_owner(callback.from_user.id):
-        await callback.answer("❌ Owner only", show_alert=True)
-        return
-    parts = callback.data.split(":")
-    if len(parts) != 3:
-        await callback.answer("Invalid request", show_alert=True)
-        return
-    action = parts[1]
-    try:
-        target_id = int(parts[2])
-    except ValueError:
-        await callback.answer("Invalid User ID", show_alert=True)
-        return
-
-    async with access_lock:
-        data = load_access()
-        target = str(target_id)
-
-        if action == "approve":
-            if target not in data["approved"]:
-                data["approved"].append(target)
-            if target in data["pending"]:
-                data["pending"].remove(target)
-            if target in data["rejected"]:
-                data["rejected"].remove(target)
-            save_access(data)
-            try:
-                await callback.message.edit_text(
-                    callback.message.text + "\n\n✅ <b>APPROVED</b>",
-                    parse_mode="HTML",
-                )
-            except Exception:
-                pass
-            try:
-                await bot.send_message(
-                    target_id,
-                    "🎉 <b>Access Approved!</b>\n\n"
-                    "Owner က သင့်ကို Bot အသုံးပြုခွင့် ပေးလိုက်ပါပြီ။",
-                    parse_mode="HTML",
-                    reply_markup=main_menu("Anna"),
-                )
-            except Exception as e:
-                print(f"⚠️ Cannot notify user: {e}")
-            await callback.answer("✅ User approved")
-            return
-
-        if action == "reject":
-            if target in data["pending"]:
-                data["pending"].remove(target)
-            if target not in data["rejected"]:
-                data["rejected"].append(target)
-            save_access(data)
-            try:
-                await callback.message.edit_text(
-                    callback.message.text + "\n\n❌ <b>REJECTED</b>",
-                    parse_mode="HTML",
-                )
-            except Exception:
-                pass
-            try:
-                await bot.send_message(
-                    target_id,
-                    "❌ <b>Access မရသေးပါ။</b>\n\n"
-                    "Owner က ဒီအချိန်မှာ Bot အသုံးပြုခွင့် မပေးထားသေးပါ။",
-                    parse_mode="HTML",
-                )
-            except Exception as e:
-                print(f"⚠️ Cannot notify user: {e}")
-            await callback.answer("❌ User rejected")
-            return
-
-    await callback.answer("Unknown action")
-
-@dp.callback_query(F.data == "menu:main")
-async def menu_main(callback: CallbackQuery):
-    uid = callback.from_user.id
-    if not is_approved(uid):
-        await callback.answer("🔐 Access မရသေးပါ", show_alert=True)
-        return
-    current = "Anna" if user_voice.get(uid, "anna") == "anna" else "Custom Voice"
-    await callback.answer()
-    await callback.message.edit_text(
-        "🎙️ <b>VoxCPM2 Myanmar Voice Bot</b>\n\n"
-        f"🎙️ <b>Current Voice:</b> {current}\n\n"
-        "အသုံးပြုလိုတဲ့ Voice ကိုရွေးပါ။",
-        parse_mode="HTML",
-        reply_markup=main_menu(current),
-    )
-
-@dp.callback_query(F.data == "menu:help")
-async def menu_help(callback: CallbackQuery):
-    if not is_approved(callback.from_user.id):
-        await callback.answer("🔐 Access မရသေးပါ", show_alert=True)
-        return
-    await callback.answer()
-    await callback.message.edit_text(
-        "ℹ️ <b>အသုံးပြုနည်း</b>\n\n"
-        "1️⃣ <b>Anna</b> ကိုရွေးပါ\n"
-        "→ Original V5 Voice ကို အသုံးပြုပါမယ်။\n\n"
-        "2️⃣ <b>Custom Voice</b> ကိုရွေးပါ\n"
-        "→ ကိုယ်အသုံးပြုလိုတဲ့ Voice File ကို ပို့ပါ။\n\n"
-        "3️⃣ Voice ရွေးပြီးရင်\n"
-        "→ မြန်မာစာကို ပို့ပါ။\n\n"
-        "4️⃣ Bot က ရွေးထားတဲ့ Voice နဲ့\n"
-        "→ အသံအဖြစ် ပြန်ပေးပါမယ်။",
-        parse_mode="HTML",
-        reply_markup=back_menu(),
-    )
-
-@dp.callback_query(F.data == "voice:anna")
-async def select_anna(callback: CallbackQuery):
-    uid = callback.from_user.id
-    if not is_approved(uid):
-        await callback.answer("🔐 Access မရသေးပါ", show_alert=True)
-        return
-    user_voice[uid] = "anna"
-    await callback.answer("👩 Anna ကို ရွေးပြီးပါပြီ")
-    await callback.message.edit_text(
-        "👩 <b>Anna</b>\n\n"
-        "Original V5 Voice ကို အသုံးပြုနေပါတယ်။\n\n"
-        "အခု မြန်မာစာပို့လိုက်ပါ။",
-        parse_mode="HTML",
-        reply_markup=main_menu("Anna"),
-    )
-
-@dp.callback_query(F.data == "voice:custom")
-async def select_custom(callback: CallbackQuery):
-    uid = callback.from_user.id
-    if not is_approved(uid):
-        await callback.answer("🔐 Access မရသေးပါ", show_alert=True)
-        return
-
-    if has_custom_voice(uid):
-        user_voice[uid] = "custom"
-        await callback.answer("🎤 Custom Voice ကို ရွေးပြီးပါပြီ")
-        text = (
-            "🎤 <b>Custom Voice</b>\n\n"
-            "လက်ရှိသိမ်းထားတဲ့ Custom Voice ကို အသုံးပြုနေပါတယ်။\n\n"
-            "အခု မြန်မာစာပို့လိုက်ပါ။\n\n"
-            "Voice အသစ်ပြောင်းချင်ရင် Audio / Voice file အသစ်ပို့ပါ။"
-        )
-    else:
-        await callback.answer()
-        text = (
-            "🎤 <b>Custom Voice</b>\n\n"
-            "ကိုယ်အသုံးပြုလိုတဲ့ အသံဖိုင်ကို ဒီနေရာမှာ ပို့ပေးပါ။\n\n"
-            "📌 <b>Supported formats:</b>\n"
-            "• Telegram Voice\n• WAV\n• MP3\n• M4A\n• OGG\n• FLAC\n\n"
-            "ဖိုင်ရောက်လာတာနဲ့ Custom Voice အဖြစ် သိမ်းပေးပါမယ်။"
-        )
-    await callback.message.edit_text(
-        text, parse_mode="HTML", reply_markup=back_menu()
-    )
-
-async def save_custom_voice(message: Message, user_id: int):
-    custom_path = get_custom_voice_path(user_id)
-    temp_original = None
-    temp_converted = None
-    try:
-        if message.voice:
-            file_id, suffix = message.voice.file_id, ".ogg"
-        elif message.audio:
-            file_id = message.audio.file_id
-            suffix = Path(message.audio.file_name or ".mp3").suffix or ".mp3"
-        elif message.document:
-            file_id = message.document.file_id
-            suffix = Path(message.document.file_name or ".wav").suffix or ".wav"
-        else:
-            return False
-
-        tg_file = await bot.get_file(file_id)
-        temp_original = Path(tempfile.gettempdir()) / f"voice_{user_id}{suffix}"
-        await bot.download_file(tg_file.file_path, destination=str(temp_original))
-
-        temp_converted = Path(tempfile.gettempdir()) / f"voice_{user_id}_converted.wav"
-        proc = await asyncio.create_subprocess_exec(
-            "ffmpeg", "-y", "-i", str(temp_original),
-            "-ac", "1", "-ar", "24000", "-sample_fmt", "s16",
-            str(temp_converted),
-            stdout=asyncio.subprocess.DEVNULL,
-            stderr=asyncio.subprocess.DEVNULL,
-        )
-        rc = await proc.wait()
-
-        if rc == 0 and temp_converted.exists():
-            shutil.copy2(temp_converted, custom_path)
-        else:
-            shutil.copy2(temp_original, custom_path)
-
-        sf.read(str(custom_path), always_2d=False)
-        user_voice[user_id] = "custom"
-        print(f"✅ Custom Voice saved: user={user_id}")
-        return True
-    except Exception as e:
-        print(f"❌ Custom Voice Error: {e}")
-        if custom_path.exists():
-            try:
-                custom_path.unlink()
-            except Exception:
-                pass
-        return False
-    finally:
-        for p in (temp_original, temp_converted):
-            if p and p.exists():
-                try:
-                    p.unlink()
-                except Exception:
-                    pass
-
-@dp.message(F.voice | F.audio | F.document)
-async def voice_upload_handler(message: Message):
-    uid = message.from_user.id
-    if not is_approved(uid):
-        await message.answer(
-            "🔐 <b>Access မရသေးပါ။</b>\n\n"
-            "Owner ခွင့်ပြုချက်ရပြီးမှ Bot ကို အသုံးပြုနိုင်ပါတယ်။",
-            parse_mode="HTML",
-        )
-        return
-
-    if message.document:
-        filename = (message.document.file_name or "").lower()
-        if not filename.endswith((".wav", ".mp3", ".m4a", ".ogg", ".flac", ".aac")):
-            await message.answer("❌ Audio file မဟုတ်ပါဘူး။ WAV / MP3 / M4A / OGG / FLAC တစ်ခုခု ပို့ပါ။")
-            return
-
-    status = await message.answer(
-        "🎤 <b>Custom Voice</b>\n\n⏳ Voice ကို သိမ်းနေပါတယ်...",
-        parse_mode="HTML",
-    )
-    ok = await save_custom_voice(message, uid)
-    if ok:
-        await status.edit_text(
-            "✅ <b>Custom Voice သိမ်းပြီးပါပြီ။</b>\n\n"
-            "🎤 <b>Current Voice:</b> Custom Voice\n\n"
-            "အခု မြန်မာစာပို့လိုက်ပါ။",
-            parse_mode="HTML",
-            reply_markup=main_menu("Custom Voice"),
-        )
-    else:
-        await status.edit_text(
-            "❌ <b>Custom Voice သိမ်းမရပါ။</b>\n\n"
-            "WAV / MP3 / M4A / Telegram Voice နဲ့ ပြန်ပို့ကြည့်ပါ။",
-            parse_mode="HTML",
-            reply_markup=main_menu("Anna"),
-        )
-
-def get_user_voice(user_id: int):
-    selected = user_voice.get(user_id, "anna")
-    if selected == "custom":
-        p = get_custom_voice_path(user_id)
-        if p.exists():
-            return p, "Custom Voice"
-        user_voice[user_id] = "anna"
-    return ANNA_VOICE, "Anna"
-
-async def generate_voice(text: str, reference_wav: Path, out: Path, voice_name: str):
-    async with tts_lock:
-        print(f"🎙️ Generating: {voice_name}")
-        print(f"Reference: {reference_wav}")
-        wav = await asyncio.to_thread(
-            model.generate,
-            text=text,
-            reference_wav_path=str(reference_wav),
-            inference_timesteps=10,
-            cfg_value=2.0,
-            retry_badcase=False,
-            max_len=5000,
-        )
-        sf.write(str(out), wav, get_sample_rate())
-        print(f"✅ Generated sample_rate={get_sample_rate()}")
-
-@dp.message(F.text)
-async def text_handler(message: Message):
-    uid = message.from_user.id
-    if not is_approved(uid):
-        await message.answer(
-            "🔐 <b>Access မရသေးပါ။</b>\n\n"
-            "Owner ခွင့်ပြုချက်ရပြီးမှ Bot ကို အသုံးပြုနိုင်ပါတယ်။",
-            parse_mode="HTML",
-        )
-        return
-
-    text = message.text.strip()
-    if not text:
-        return
-    if len(text) > 5000:
-        await message.answer("❌ စာသားက 5000 characters ထက်မကျော်ရပါ။")
-        return
-
-    ref, voice_name = get_user_voice(uid)
-    if not ref.exists():
-        await message.answer("❌ Voice file မတွေ့ပါဘူး။ Anna voice file ကို စစ်ပေးပါ။")
-        return
-
-    status = await message.answer(
-        f"🎙️ <b>{voice_name}</b>\n\n⏳ မြန်မာအသံထုတ်နေပါတယ်...",
-        parse_mode="HTML",
-    )
-    output = Path(tempfile.gettempdir()) / f"tts_{uid}_{message.message_id}.wav"
-    try:
-        await generate_voice(text, ref, output, voice_name)
-        await status.edit_text(
-            f"🎙️ <b>{voice_name}</b>\n\n✅ အသံထွက်ပြီးပါပြီ။",
-            parse_mode="HTML",
-        )
-        await message.answer_audio(
-            audio=FSInputFile(str(output)),
-            title=f"{voice_name} Voice",
-        )
-    except Exception as e:
-        print(f"❌ TTS Error: {e}")
-        await status.edit_text(
-            "❌ TTS Error ဖြစ်သွားပါတယ်။\n\n"
-            f"<code>{str(e)[:500]}</code>",
-            parse_mode="HTML",
-        )
-    finally:
-        if output.exists():
-            try:
-                output.unlink()
-            except Exception:
-                pass
+# ============================================================
+# STARTUP
+# ============================================================
 
 async def main():
-    if not BOT_TOKEN:
-        raise RuntimeError("BOT_TOKEN မတွေ့ပါ။")
-    if OWNER_ID == 0:
-        raise RuntimeError("OWNER_ID မထည့်ရသေးပါ။")
+
+    print()
+    print("=" * 60)
+    print("🚀 VoxCPM2 Telegram Bot")
+    print("=" * 60)
+
+    # --------------------------------------------------------
+    # Check Anna
+    # --------------------------------------------------------
+
     if not ANNA_VOICE.exists():
-        raise FileNotFoundError(f"Anna voice file မတွေ့ပါ: {ANNA_VOICE}")
 
-    print("🚀 Starting VoxCPM2 Telegram Bot...")
-    print(f"👑 Owner ID: {OWNER_ID}")
+        raise FileNotFoundError(
+            f"Anna voice file မတွေ့ပါ:\n"
+            f"{ANNA_VOICE}"
+        )
 
-    await asyncio.to_thread(download_model)
-    await asyncio.to_thread(load_model)
+    print(
+        "✅ Anna Voice:",
+        ANNA_VOICE
+    )
 
-    print("✅ VoxCPM2 Telegram Bot READY")
-    await dp.start_polling(bot)
+    # --------------------------------------------------------
+    # Check Fangyung
+    # --------------------------------------------------------
+
+    if not FANGYUNG_VOICE.exists():
+
+        raise FileNotFoundError(
+            f"Fangyung voice file မတွေ့ပါ:\n"
+            f"{FANGYUNG_VOICE}"
+        )
+
+    print(
+        "✅ Fangyung Voice:",
+        FANGYUNG_VOICE
+    )
+
+    # --------------------------------------------------------
+    # Create custom voice directory
+    # --------------------------------------------------------
+
+    CUSTOM_VOICE_DIR.mkdir(
+        parents=True,
+        exist_ok=True
+    )
+
+    # --------------------------------------------------------
+    # Download model
+    # --------------------------------------------------------
+
+    await download_model()
+
+    # --------------------------------------------------------
+    # Load model
+    # --------------------------------------------------------
+
+    await load_model()
+
+    # --------------------------------------------------------
+    # Bot start
+    # --------------------------------------------------------
+
+    print()
+    print("=" * 60)
+    print("🤖 Bot Starting...")
+    print("=" * 60)
+
+    await dp.start_polling(
+        bot
+    )
+
+
+# ============================================================
+# RUN
+# ============================================================
 
 if __name__ == "__main__":
-    asyncio.run(main())
+
+    try:
+
+        asyncio.run(
+            main()
+        )
+
+    except KeyboardInterrupt:
+
+        print(
+            "\n🛑 Bot stopped."
+        )
+
+    except Exception as e:
+
+        print()
+        print("❌ FATAL ERROR")
+        print(e)
+
+        raise
