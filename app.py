@@ -15,6 +15,7 @@ from aiogram.types import (
     CallbackQuery,
     InlineKeyboardMarkup,
     InlineKeyboardButton,
+    FSInputFile,
 )
 from aiogram.client.default import DefaultBotProperties
 
@@ -1136,20 +1137,17 @@ async def text_to_speech(message: Message):
         # Send voice
         # ----------------------------------------------------
 
-        with open(
-            output_path,
-            "rb"
-        ) as audio_file:
+        voice_file = FSInputFile(output_path)
 
-            await message.answer_voice(
-                audio=audio_file,
-                caption=(
-                    f"🎙️ <b>{voice_name}</b>"
-                ),
-                reply_markup=main_menu(
-                    voice_name
-                )
+        await message.answer_voice(
+            voice=voice_file,
+            caption=(
+                f"🎙️ <b>{voice_name}</b>"
+            ),
+            reply_markup=main_menu(
+                voice_name
             )
+        )
 
     except Exception as e:
 
