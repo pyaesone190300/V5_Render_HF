@@ -46,7 +46,7 @@ ANNA_NAME = "Anna"
 # Fangyung
 # ------------------------------------------------------------
 
-FANGYUNG_VOICE = BASE_DIR / "Fangyung_natural.wav"
+FANGYUNG_VOICE = BASE_DIR / "Fangyung.wav"
 FANGYUNG_NAME = "Fangyung"
 
 # ------------------------------------------------------------
