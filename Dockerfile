@@ -6,4 +6,5 @@ COPY requirements.txt .
 RUN pip install --upgrade pip && pip install -r requirements.txt
 COPY app.py .
 COPY vvipvoice_v5_ref.wav /app/vvipvoice_v5_ref.wav
+COPY Fangyung_vvip.wav /app/Fangyung_vvip.wav
 CMD ["python","app.py"]
