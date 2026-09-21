@@ -47,8 +47,29 @@ ANNA_NAME = "Anna"
 # Fangyung
 # ------------------------------------------------------------
 
-FANGYUNG_VOICE = BASE_DIR / "Fangyung_vvip.wav"
+FANGYUNG_VOICE = BASE_DIR / "Fangyung_vvipvoice.wav"
 FANGYUNG_NAME = "Fangyung"
+
+# ------------------------------------------------------------
+# Htun
+# ------------------------------------------------------------
+
+HTUN_VOICE = BASE_DIR / "Htun_vvipvoice.wav"
+HTUN_NAME = "Htun"
+
+# ------------------------------------------------------------
+# Phyo
+# ------------------------------------------------------------
+
+PHYO_VOICE = BASE_DIR / "Phyo_vvipvoice.wav"
+PHYO_NAME = "Phyo"
+
+# ------------------------------------------------------------
+# Pyae
+# ------------------------------------------------------------
+
+PYAE_VOICE = BASE_DIR / "Pyae_vvipvoice.wav"
+PYAE_NAME = "Pyae"
 
 # ------------------------------------------------------------
 # Custom Voice
@@ -83,7 +104,7 @@ dp = Dispatcher()
 model = None
 
 # User selected voice
-# anna / fangyung / custom
+# anna / fangyung / htun / phyo / pyae / custom
 user_voice = {}
 
 # TTS lock
@@ -188,7 +209,21 @@ def main_menu(current="Anna"):
             ],
             [
                 InlineKeyboardButton(
-                    text=f"🎤 Custom Voice{'  ✓' if current == 'Custom Voice' else ''}",
+                    text=f"👦 Htun{'  ✓' if current == 'Htun' else ''}",
+                    callback_data="voice:htun",
+                ),
+                InlineKeyboardButton(
+                    text=f"👦 Phyo{'  ✓' if current == 'Phyo' else ''}",
+                    callback_data="voice:phyo",
+                ),
+            ],
+            [
+                InlineKeyboardButton(
+                    text=f"👦 Pyae{'  ✓' if current == 'Pyae' else ''}",
+                    callback_data="voice:pyae",
+                ),
+                InlineKeyboardButton(
+                    text=f"🎤 Custom{'  ✓' if current == 'Custom Voice' else ''}",
                     callback_data="voice:custom",
                 ),
             ],
@@ -271,6 +306,9 @@ async def start_handler(message: Message):
         "အသံရွေးချယ်ပြီး မြန်မာစာပို့ပါ။\n\n"
         "👩 Anna — Original Voice\n"
         "🎙️ Fangyung — Natural Boy Voice\n"
+        "👦 Htun — Htun Voice\n"
+        "👦 Phyo — Phyo Voice\n"
+        "👦 Pyae — Pyae Voice\n"
         "🎤 Custom Voice — ကိုယ်ပိုင် Voice",
         reply_markup=main_menu("Anna")
     )
@@ -496,6 +534,144 @@ async def select_fangyung(callback: CallbackQuery):
 
 
 # ============================================================
+# HTUN SELECT
+# ============================================================
+
+@dp.callback_query(F.data == "voice:htun")
+async def select_htun(callback: CallbackQuery):
+
+    uid = callback.from_user.id
+
+    if not is_approved(uid):
+
+        await callback.answer(
+            "🔐 Access မရသေးပါ",
+            show_alert=True
+        )
+
+        return
+
+    if not HTUN_VOICE.exists():
+
+        await callback.answer(
+            "❌ Htun voice file မတွေ့ပါ",
+            show_alert=True
+        )
+
+        return
+
+    user_voice[uid] = "htun"
+
+    await callback.answer(
+        "👦 Htun ကို ရွေးပြီးပါပြီ"
+    )
+
+    try:
+
+        await callback.message.edit_text(
+            "👦 <b>Htun</b>\n\n"
+            "Htun Voice ကို အသုံးပြုနေပါတယ်။\n\n"
+            "အခု မြန်မာစာပို့လိုက်ပါ။",
+            reply_markup=main_menu("Htun")
+        )
+
+    except Exception:
+        pass
+
+
+# ============================================================
+# PHYO SELECT
+# ============================================================
+
+@dp.callback_query(F.data == "voice:phyo")
+async def select_phyo(callback: CallbackQuery):
+
+    uid = callback.from_user.id
+
+    if not is_approved(uid):
+
+        await callback.answer(
+            "🔐 Access မရသေးပါ",
+            show_alert=True
+        )
+
+        return
+
+    if not PHYO_VOICE.exists():
+
+        await callback.answer(
+            "❌ Phyo voice file မတွေ့ပါ",
+            show_alert=True
+        )
+
+        return
+
+    user_voice[uid] = "phyo"
+
+    await callback.answer(
+        "👦 Phyo ကို ရွေးပြီးပါပြီ"
+    )
+
+    try:
+
+        await callback.message.edit_text(
+            "👦 <b>Phyo</b>\n\n"
+            "Phyo Voice ကို အသုံးပြုနေပါတယ်။\n\n"
+            "အခု မြန်မာစာပို့လိုက်ပါ။",
+            reply_markup=main_menu("Phyo")
+        )
+
+    except Exception:
+        pass
+
+
+# ============================================================
+# PYAE SELECT
+# ============================================================
+
+@dp.callback_query(F.data == "voice:pyae")
+async def select_pyae(callback: CallbackQuery):
+
+    uid = callback.from_user.id
+
+    if not is_approved(uid):
+
+        await callback.answer(
+            "🔐 Access မရသေးပါ",
+            show_alert=True
+        )
+
+        return
+
+    if not PYAE_VOICE.exists():
+
+        await callback.answer(
+            "❌ Pyae voice file မတွေ့ပါ",
+            show_alert=True
+        )
+
+        return
+
+    user_voice[uid] = "pyae"
+
+    await callback.answer(
+        "👦 Pyae ကို ရွေးပြီးပါပြီ"
+    )
+
+    try:
+
+        await callback.message.edit_text(
+            "👦 <b>Pyae</b>\n\n"
+            "Pyae Voice ကို အသုံးပြုနေပါတယ်။\n\n"
+            "အခု မြန်မာစာပို့လိုက်ပါ။",
+            reply_markup=main_menu("Pyae")
+        )
+
+    except Exception:
+        pass
+
+
+# ============================================================
 # CUSTOM SELECT
 # ============================================================
 
@@ -582,27 +758,31 @@ async def help_menu(callback: CallbackQuery):
 
     await callback.answer()
 
+    curr = user_voice.get(uid, "anna")
+    curr_name = "Anna"
+    if curr == "fangyung":
+        curr_name = "Fangyung"
+    elif curr == "htun":
+        curr_name = "Htun"
+    elif curr == "phyo":
+        curr_name = "Phyo"
+    elif curr == "pyae":
+        curr_name = "Pyae"
+    elif curr == "custom":
+        curr_name = "Custom Voice"
+
     try:
 
         await callback.message.edit_text(
             "ℹ️ <b>How to Use</b>\n\n"
-            "👩 <b>Anna</b>\n"
-            "Original Anna Voice\n\n"
-            "🎙️ <b>Fangyung</b>\n"
-            "Natural Boy Voice\n\n"
-            "🎤 <b>Custom Voice</b>\n"
-            "ကိုယ်ပိုင် Voice file upload လုပ်ပြီး "
-            "အသုံးပြုနိုင်ပါတယ်။\n\n"
+            "👩 <b>Anna</b> — Original Anna Voice\n"
+            "🎙️ <b>Fangyung</b> — Natural Boy Voice\n"
+            "👦 <b>Htun</b> — Htun Voice\n"
+            "👦 <b>Phyo</b> — Phyo Voice\n"
+            "👦 <b>Pyae</b> — Pyae Voice\n"
+            "🎤 <b>Custom Voice</b> — ကိုယ်ပိုင် Voice file upload လုပ်ပြီး အသုံးပြုနိုင်ပါတယ်။\n\n"
             "📝 Voice ရွေးပြီးနောက် မြန်မာစာပို့ပါ။",
-            reply_markup=main_menu(
-                "Anna"
-                if user_voice.get(uid, "anna") == "anna"
-                else (
-                    "Fangyung"
-                    if user_voice.get(uid) == "fangyung"
-                    else "Custom Voice"
-                )
-            )
+            reply_markup=main_menu(curr_name)
         )
 
     except Exception:
@@ -914,7 +1094,66 @@ def get_user_voice(user_id: int):
                 FANGYUNG_NAME
             )
 
-        # Fallback to Anna
+        user_voice[user_id] = "anna"
+
+        return (
+            ANNA_VOICE,
+            ANNA_NAME
+        )
+
+    # --------------------------------------------------------
+    # Htun
+    # --------------------------------------------------------
+
+    if selected == "htun":
+
+        if HTUN_VOICE.exists():
+
+            return (
+                HTUN_VOICE,
+                HTUN_NAME
+            )
+
+        user_voice[user_id] = "anna"
+
+        return (
+            ANNA_VOICE,
+            ANNA_NAME
+        )
+
+    # --------------------------------------------------------
+    # Phyo
+    # --------------------------------------------------------
+
+    if selected == "phyo":
+
+        if PHYO_VOICE.exists():
+
+            return (
+                PHYO_VOICE,
+                PHYO_NAME
+            )
+
+        user_voice[user_id] = "anna"
+
+        return (
+            ANNA_VOICE,
+            ANNA_NAME
+        )
+
+    # --------------------------------------------------------
+    # Pyae
+    # --------------------------------------------------------
+
+    if selected == "pyae":
+
+        if PYAE_VOICE.exists():
+
+            return (
+                PYAE_VOICE,
+                PYAE_NAME
+            )
+
         user_voice[user_id] = "anna"
 
         return (
@@ -939,7 +1178,6 @@ def get_user_voice(user_id: int):
                 "Custom Voice"
             )
 
-        # Fallback to Anna
         user_voice[user_id] = "anna"
 
         return (
@@ -955,7 +1193,7 @@ def get_user_voice(user_id: int):
 
     return (
         ANNA_VOICE,
-        ANNA_NAME
+            ANNA_NAME
     )
 
 
@@ -998,15 +1236,9 @@ async def generate_voice(
         print("Text Length:", len(text))
         print("=" * 60)
 
-        # ----------------------------------------------------
-        # Anna = ORIGINAL SETTING
-        # Fangyung = NATURAL SETTING
-        # Custom = NATURAL SETTING
-        # ----------------------------------------------------
-
         if voice_name == "Anna":
 
-            inference_timesteps = 10
+            inference_timesteps = 30
 
         else:
 
@@ -1067,30 +1299,18 @@ async def text_to_speech(message: Message):
 
         return
 
-    # --------------------------------------------------------
-    # MAX TEXT
-    # --------------------------------------------------------
-
-    if len(text) > 5000:
+    if len(text) > 3000:
 
         await message.answer(
-            "❌ စာသားအရှည်ဆုံး 2000 characters အထိသာ "
+            "❌ စာသားအရှည်ဆုံး 3000 characters အထိသာ "
             "အသုံးပြုနိုင်ပါတယ်။"
         )
 
         return
 
-    # --------------------------------------------------------
-    # Get selected voice
-    # --------------------------------------------------------
-
     reference_wav, voice_name = get_user_voice(
         uid
     )
-
-    # --------------------------------------------------------
-    # Reference check
-    # --------------------------------------------------------
 
     if not reference_wav.exists():
 
@@ -1100,10 +1320,6 @@ async def text_to_speech(message: Message):
         )
 
         return
-
-    # --------------------------------------------------------
-    # Status
-    # --------------------------------------------------------
 
     status = await message.answer(
         f"🎙️ <b>{voice_name}</b>\n\n"
@@ -1124,18 +1340,10 @@ async def text_to_speech(message: Message):
             voice_name=voice_name
         )
 
-        # ----------------------------------------------------
-        # Delete processing message
-        # ----------------------------------------------------
-
         try:
             await status.delete()
         except Exception:
             pass
-
-        # ----------------------------------------------------
-        # Send voice
-        # ----------------------------------------------------
 
         voice_file = FSInputFile(output_path)
 
@@ -1187,10 +1395,6 @@ async def download_model():
         parents=True,
         exist_ok=True
     )
-
-    # --------------------------------------------------------
-    # Check whether model already exists
-    # --------------------------------------------------------
 
     existing_files = list(
         MODEL_DIR.rglob("*")
@@ -1289,6 +1493,54 @@ async def main():
     print(
         "✅ Fangyung Voice:",
         FANGYUNG_VOICE
+    )
+
+    # --------------------------------------------------------
+    # Check Htun
+    # --------------------------------------------------------
+
+    if not HTUN_VOICE.exists():
+
+        raise FileNotFoundError(
+            f"Htun voice file မတွေ့ပါ:\n"
+            f"{HTUN_VOICE}"
+        )
+
+    print(
+        "✅ Htun Voice:",
+        HTUN_VOICE
+    )
+
+    # --------------------------------------------------------
+    # Check Phyo
+    # --------------------------------------------------------
+
+    if not PHYO_VOICE.exists():
+
+        raise FileNotFoundError(
+            f"Phyo voice file မတွေ့ပါ:\n"
+            f"{PHYO_VOICE}"
+        )
+
+    print(
+        "✅ Phyo Voice:",
+        PHYO_VOICE
+    )
+
+    # --------------------------------------------------------
+    # Check Pyae
+    # --------------------------------------------------------
+
+    if not PYAE_VOICE.exists():
+
+        raise FileNotFoundError(
+            f"Pyae voice file မတွေ့ပါ:\n"
+            f"{PYAE_VOICE}"
+        )
+
+    print(
+        "✅ Pyae Voice:",
+        PYAE_VOICE
     )
 
     # --------------------------------------------------------
