@@ -1215,8 +1215,10 @@ def get_sample_rate():
     return 24000
 
 
+import numpy as np
+
 # ============================================================
-# GENERATE VOICE
+# GENERATE VOICE (Auto Chunking)
 # ============================================================
 
 async def generate_voice(
@@ -1230,49 +1232,61 @@ async def generate_voice(
 
         print()
         print("=" * 60)
-        print("🎙️ Generating Voice")
+        print("🎙️ Generating Voice (Auto Chunking)")
         print("Voice:", voice_name)
-        print("Reference:", reference_wav)
         print("Text Length:", len(text))
         print("=" * 60)
 
         if voice_name == "Anna":
-
-            inference_timesteps = 30
-
+            inference_timesteps = 10
         else:
-
             inference_timesteps = 30
 
-        print(
-            "Inference Timesteps:",
-            inference_timesteps
-        )
+        # မြန်မာစာ ပုဒ်မ (။) သို့မဟုတ် Enter ခေါက်ထားသော နေရာများမှ စာကြောင်းခွဲခြင်း
+        text = text.replace('\n', '။')
+        sentences = [s.strip() + "။" for s in text.split('။') if s.strip()]
+        
+        # အကယ်၍ ခွဲစရာမရှိလျှင် မူလစာသားအတိုင်းထားရန်
+        if not sentences:
+            sentences = [text]
+
+        combined_wav = []
 
         with torch.inference_mode():
+            for idx, chunk in enumerate(sentences):
+                print(f"⏳ Generating part {idx+1}/{len(sentences)}...")
+                
+                # အပိုင်းတစ်ပိုင်းချင်းစီအတွက် အသံထုတ်ခြင်း
+                wav_chunk = await asyncio.to_thread(
+                    model.generate,
+                    text=chunk,
+                    reference_wav_path=str(reference_wav),
+                    cfg_value=2.0,
+                    inference_timesteps=inference_timesteps,
+                    retry_badcase=False,
+                    max_len=2000,
+                )
+                combined_wav.append(wav_chunk)
+                
+                # စာကြောင်းတစ်ကြောင်းနဲ့ တစ်ကြောင်းကြား အသံတိတ် (Silence) ၀.၅ စက္ကန့် ထည့်ခြင်း
+                silence = np.zeros(int(get_sample_rate() * 0.5))
+                combined_wav.append(silence)
 
-            wav = await asyncio.to_thread(
-                model.generate,
-                text=text,
-                reference_wav_path=str(
-                    reference_wav
-                ),
-                cfg_value=2.0,
-                inference_timesteps=inference_timesteps,
-                retry_badcase=False,
-                max_len=2000,
-            )
+        # ထွက်လာသမျှ အသံဖိုင်အပိုင်းများကို တစ်ခုတည်းဖြစ်အောင် ပြန်ဆက်ခြင်း
+        final_wav = np.concatenate(combined_wav)
 
+        # အသံဖိုင်အဖြစ် သိမ်းဆည်းခြင်း
         sf.write(
             str(output_path),
-            wav,
+            final_wav,
             get_sample_rate()
         )
 
         print(
-            "✅ Generated:",
+            "✅ Generated Combined Audio:",
             output_path
         )
+
 
 
 # ============================================================
@@ -1299,30 +1313,18 @@ async def text_to_speech(message: Message):
 
         return
 
-    # --------------------------------------------------------
-    # MAX TEXT
-    # --------------------------------------------------------
-
-    if len(text) > 5000:
+    if len(text) > 3000:
 
         await message.answer(
-            "❌ စာသားအရှည်ဆုံး 2000 characters အထိသာ "
+            "❌ စာသားအရှည်ဆုံး 3000 characters အထိသာ "
             "အသုံးပြုနိုင်ပါတယ်။"
         )
 
         return
 
-    # --------------------------------------------------------
-    # Get selected voice
-    # --------------------------------------------------------
-
     reference_wav, voice_name = get_user_voice(
         uid
     )
-
-    # --------------------------------------------------------
-    # Reference check
-    # --------------------------------------------------------
 
     if not reference_wav.exists():
 
@@ -1332,10 +1334,6 @@ async def text_to_speech(message: Message):
         )
 
         return
-
-    # --------------------------------------------------------
-    # Status
-    # --------------------------------------------------------
 
     status = await message.answer(
         f"🎙️ <b>{voice_name}</b>\n\n"
@@ -1356,23 +1354,13 @@ async def text_to_speech(message: Message):
             voice_name=voice_name
         )
 
-        # ----------------------------------------------------
-        # Delete processing message
-        # ----------------------------------------------------
-
         try:
             await status.delete()
         except Exception:
             pass
 
-        # ----------------------------------------------------
-        # Send voice and audio file for easy downloading
-        # ----------------------------------------------------
-
         voice_file = FSInputFile(output_path)
-        audio_file = FSInputFile(output_path)
 
-        # Voice Message အနေနဲ့ ပို့မယ်
         await message.answer_voice(
             voice=voice_file,
             caption=(
@@ -1381,13 +1369,6 @@ async def text_to_speech(message: Message):
             reply_markup=main_menu(
                 voice_name
             )
-        )
-
-        # ဖုန်းထဲ Download ဆွဲလို့ရအောင် Audio ဖိုင်အဖြစ်ပါ ထပ်ပို့ပေးမယ်
-        await message.answer_audio(
-            audio=audio_file,
-            caption=f"📥 Download Audio ({voice_name})",
-            filename=f"{voice_name}_tts.wav"
         )
 
     except Exception as e:
@@ -1416,7 +1397,6 @@ async def text_to_speech(message: Message):
                 output_path.unlink()
             except Exception:
                 pass
-
 
 
 # ============================================================
