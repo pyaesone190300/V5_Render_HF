@@ -1299,18 +1299,30 @@ async def text_to_speech(message: Message):
 
         return
 
-    if len(text) > 3000:
+    # --------------------------------------------------------
+    # MAX TEXT
+    # --------------------------------------------------------
+
+    if len(text) > 5000:
 
         await message.answer(
-            "❌ စာသားအရှည်ဆုံး 3000 characters အထိသာ "
+            "❌ စာသားအရှည်ဆုံး 2000 characters အထိသာ "
             "အသုံးပြုနိုင်ပါတယ်။"
         )
 
         return
 
+    # --------------------------------------------------------
+    # Get selected voice
+    # --------------------------------------------------------
+
     reference_wav, voice_name = get_user_voice(
         uid
     )
+
+    # --------------------------------------------------------
+    # Reference check
+    # --------------------------------------------------------
 
     if not reference_wav.exists():
 
@@ -1320,6 +1332,10 @@ async def text_to_speech(message: Message):
         )
 
         return
+
+    # --------------------------------------------------------
+    # Status
+    # --------------------------------------------------------
 
     status = await message.answer(
         f"🎙️ <b>{voice_name}</b>\n\n"
@@ -1340,13 +1356,23 @@ async def text_to_speech(message: Message):
             voice_name=voice_name
         )
 
+        # ----------------------------------------------------
+        # Delete processing message
+        # ----------------------------------------------------
+
         try:
             await status.delete()
         except Exception:
             pass
 
-        voice_file = FSInputFile(output_path)
+        # ----------------------------------------------------
+        # Send voice and audio file for easy downloading
+        # ----------------------------------------------------
 
+        voice_file = FSInputFile(output_path)
+        audio_file = FSInputFile(output_path)
+
+        # Voice Message အနေနဲ့ ပို့မယ်
         await message.answer_voice(
             voice=voice_file,
             caption=(
@@ -1355,6 +1381,13 @@ async def text_to_speech(message: Message):
             reply_markup=main_menu(
                 voice_name
             )
+        )
+
+        # ဖုန်းထဲ Download ဆွဲလို့ရအောင် Audio ဖိုင်အဖြစ်ပါ ထပ်ပို့ပေးမယ်
+        await message.answer_audio(
+            audio=audio_file,
+            caption=f"📥 Download Audio ({voice_name})",
+            filename=f"{voice_name}_tts.wav"
         )
 
     except Exception as e:
@@ -1383,6 +1416,7 @@ async def text_to_speech(message: Message):
                 output_path.unlink()
             except Exception:
                 pass
+
 
 
 # ============================================================
