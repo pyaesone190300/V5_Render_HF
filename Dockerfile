@@ -10,4 +10,5 @@ COPY Fangyung_vvipvoice.wav /app/Fangyung_vvipvoice.wav
 COPY Htun_vvipvoice.wav /app/Htun_vvipvoice.wav
 COPY Pyae_vvipvoice.wav /app/Pyae_vvipvoice.wav
 COPY Phyo_vvipvoice.wav /app/Phyo_vvipvoice.wav
+COPY Zxee_vvipvoice.wav /app/Zxee_vvipvoice.wav
 CMD ["python","app.py"]
