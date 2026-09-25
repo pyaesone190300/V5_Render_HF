@@ -6,6 +6,7 @@ from pathlib import Path
 
 import soundfile as sf
 import torch
+import numpy as np
 
 from aiogram import Bot, Dispatcher, F
 from aiogram.enums import ParseMode
@@ -72,6 +73,13 @@ PYAE_VOICE = BASE_DIR / "Pyae_vvipvoice.wav"
 PYAE_NAME = "Pyae"
 
 # ------------------------------------------------------------
+# Zxee
+# ------------------------------------------------------------
+
+ZXEE_VOICE = BASE_DIR / "Zxee_vvipvoice.wav"
+ZXEE_NAME = "Zxee"
+
+# ------------------------------------------------------------
 # Custom Voice
 # ------------------------------------------------------------
 
@@ -104,7 +112,7 @@ dp = Dispatcher()
 model = None
 
 # User selected voice
-# anna / fangyung / htun / phyo / pyae / custom
+# anna / fangyung / htun / phyo / pyae / zxee / custom
 user_voice = {}
 
 # TTS lock
@@ -223,9 +231,15 @@ def main_menu(current="Anna"):
                     callback_data="voice:pyae",
                 ),
                 InlineKeyboardButton(
+                    text=f"👦 Zxee{'  ✓' if current == 'Zxee' else ''}",
+                    callback_data="voice:zxee",
+                ),
+            ],
+            [
+                InlineKeyboardButton(
                     text=f"🎤 Custom{'  ✓' if current == 'Custom Voice' else ''}",
                     callback_data="voice:custom",
-                ),
+                )
             ],
             [
                 InlineKeyboardButton(
@@ -309,6 +323,7 @@ async def start_handler(message: Message):
         "👦 Htun — Htun Voice\n"
         "👦 Phyo — Phyo Voice\n"
         "👦 Pyae — Pyae Voice\n"
+        "👦 Zxee — Zxee Voice\n"
         "🎤 Custom Voice — ကိုယ်ပိုင် Voice",
         reply_markup=main_menu("Anna")
     )
@@ -672,6 +687,52 @@ async def select_pyae(callback: CallbackQuery):
 
 
 # ============================================================
+# ZXEE SELECT
+# ============================================================
+
+@dp.callback_query(F.data == "voice:zxee")
+async def select_zxee(callback: CallbackQuery):
+
+    uid = callback.from_user.id
+
+    if not is_approved(uid):
+
+        await callback.answer(
+            "🔐 Access မရသေးပါ",
+            show_alert=True
+        )
+
+        return
+
+    if not ZXEE_VOICE.exists():
+
+        await callback.answer(
+            "❌ Zxee voice file မတွေ့ပါ",
+            show_alert=True
+        )
+
+        return
+
+    user_voice[uid] = "zxee"
+
+    await callback.answer(
+        "👦 Zxee ကို ရွေးပြီးပါပြီ"
+    )
+
+    try:
+
+        await callback.message.edit_text(
+            "👦 <b>Zxee</b>\n\n"
+            "Zxee Voice ကို အသုံးပြုနေပါတယ်။\n\n"
+            "အခု မြန်မာစာပို့လိုက်ပါ။",
+            reply_markup=main_menu("Zxee")
+        )
+
+    except Exception:
+        pass
+
+
+# ============================================================
 # CUSTOM SELECT
 # ============================================================
 
@@ -768,6 +829,8 @@ async def help_menu(callback: CallbackQuery):
         curr_name = "Phyo"
     elif curr == "pyae":
         curr_name = "Pyae"
+    elif curr == "zxee":
+        curr_name = "Zxee"
     elif curr == "custom":
         curr_name = "Custom Voice"
 
@@ -780,6 +843,7 @@ async def help_menu(callback: CallbackQuery):
             "👦 <b>Htun</b> — Htun Voice\n"
             "👦 <b>Phyo</b> — Phyo Voice\n"
             "👦 <b>Pyae</b> — Pyae Voice\n"
+            "👦 <b>Zxee</b> — Zxee Voice\n"
             "🎤 <b>Custom Voice</b> — ကိုယ်ပိုင် Voice file upload လုပ်ပြီး အသုံးပြုနိုင်ပါတယ်။\n\n"
             "📝 Voice ရွေးပြီးနောက် မြန်မာစာပို့ပါ။",
             reply_markup=main_menu(curr_name)
@@ -1162,6 +1226,26 @@ def get_user_voice(user_id: int):
         )
 
     # --------------------------------------------------------
+    # Zxee
+    # --------------------------------------------------------
+
+    if selected == "zxee":
+
+        if ZXEE_VOICE.exists():
+
+            return (
+                ZXEE_VOICE,
+                ZXEE_NAME
+            )
+
+        user_voice[user_id] = "anna"
+
+        return (
+            ANNA_VOICE,
+            ANNA_NAME
+        )
+
+    # --------------------------------------------------------
     # Custom
     # --------------------------------------------------------
 
@@ -1214,8 +1298,6 @@ def get_sample_rate():
 
     return 24000
 
-
-import numpy as np
 
 # ============================================================
 # GENERATE VOICE (Auto Chunking)
@@ -1555,6 +1637,22 @@ async def main():
     print(
         "✅ Pyae Voice:",
         PYAE_VOICE
+    )
+
+    # --------------------------------------------------------
+    # Check Zxee
+    # --------------------------------------------------------
+
+    if not ZXEE_VOICE.exists():
+
+        raise FileNotFoundError(
+            f"Zxee voice file မတွေ့ပါ:\n"
+            f"{ZXEE_VOICE}"
+        )
+
+    print(
+        "✅ Zxee Voice:",
+        ZXEE_VOICE
     )
 
     # --------------------------------------------------------
