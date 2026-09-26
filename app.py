@@ -884,7 +884,7 @@ async def convert_to_wav(
         "-ac",
         "1",
         "-ar",
-        "24000",
+        "48000",
         "-sample_fmt",
         "s16",
         str(output_path),
@@ -1320,7 +1320,7 @@ async def generate_voice(
         print("=" * 60)
 
         if voice_name == "Anna":
-            inference_timesteps = 10
+            inference_timesteps = 30
         else:
             inference_timesteps = 30
 
